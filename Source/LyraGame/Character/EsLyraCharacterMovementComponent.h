@@ -4,10 +4,16 @@
 
 #include "CoreMinimal.h"
 #include "Character/LyraCharacterMovementComponent.h"
+#include "UObject/ObjectRename.h"
 #include "EsLyraCharacterMovementComponent.generated.h"
 
+class UJetpackComponent;
+class UNiagaraComponent;
+class UAudioComponent;
 class ULyraHealthComponent;
 class ALyraCharacter;
+
+
 
 /* Encapsulates a client move that is sent to the server for CMC networking */
 struct FEsNetworkMoveData : public FCharacterNetworkMoveData
@@ -41,6 +47,7 @@ enum ECustomMovementMode
 {
 	CMOVE_None			UMETA(Hidden),
 	CMOVE_WallRun		UMETA(DisplayName = "Wall Run"),
+	CMOVE_Jetpacking    UMETA(DisplayName = "Jetpacking"),
 	CMOVE_MAX			UMETA(Hidden),
 };
 
@@ -65,7 +72,7 @@ UCLASS()
 class LYRAGAME_API UEsLyraCharacterMovementComponent : public ULyraCharacterMovementComponent
 {
 	GENERATED_BODY()
-	
+
 public:
 	UEsLyraCharacterMovementComponent(const FObjectInitializer& ObjectInitializer);
 
@@ -134,14 +141,32 @@ public:
 	UPROPERTY(EditDefaultsOnly)
 	float AuthRewindTimeCooldownDuration = 11.f;
 	
+
+	//Jetpacking
+	TObjectPtr<UJetpackComponent> JetpackComponent;
+	
+	/* When defining the velocity for jetpacking on z axes */
+	UPROPERTY(EditDefaultsOnly, Category = "Custom|Jetpack")
+	float JetpackVelocity;
+	
+	UPROPERTY(EditAnywhere, Category ="Custom|Jetpack")
+	FGameplayTagContainer JetpackGameplayActionTag;
+	
+
+	UFUNCTION(BlueprintCallable)
+	bool CanUseJetpack() const;
+	
+	virtual bool IsFalling() const override;
+	
 	/*
 	 *  Flags (Transient)
 	 */
-	
+
 	bool Safe_bWantsToTeleport;
 	mutable bool Safe_bWantsToWallRun;
 	bool Safe_bIsRewinding;
 	int32 Safe_RewindingIndex;
+	bool Safe_bWantsToUseJetpack;
 
 	float TeleportStartTime;
 	FTimerHandle TimerHandle_LateJumpCooldown;
@@ -157,24 +182,25 @@ public:
 	/*
 	 *  Delegates
 	 */
-	
+
 protected:
-	
+
 	// Movement Pipeline
 	/** <UCharacterMovementComponent> */
 	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void UpdateCharacterStateBeforeMovement(float DeltaSeconds) override;
 	virtual void PhysCustom(float deltaTime, int32 Iterations) override;
 	/** </UCharacterMovementComponent> */
-	
+
 private:
 
 	FEsNetworkMoveDataContainer EsNetworkMoveDataContainer;
-	
+
 	/*
 	 *  Teleport
 	 */
-	
+
 	void PerformTeleport();
 
 	/*
@@ -215,7 +241,24 @@ private:
 
 	bool bStartRewinding = false;
 	
+	/*
+	* Jetpacking
+	*/
+	
+    /** Cancel jetpack ability using the tag specified in the blueprint through the parameter JetpackGameplayActionTag.
+     * returns true if the ability was canceled false otherwise
+     */
+	bool CancelJetpackGameplayAbility() const;
+	
+	void PhysJetpacking(float deltaTime, int32 Iterations);
+	
+	UFUNCTION(Reliable, Server, WithValidation)
+	void Server_ChangeJetpackStatus(bool bIsJetpackON);
+
+
+
 protected:
+	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
 	/*
 	 *  Network
 	 */
@@ -240,6 +283,14 @@ public:
 
 	UFUNCTION(BlueprintCallable)
 	void TeleportPressed();
+
+	/* Function called  by GA_Hero_Jetpack when the keymap for the jetpack is pressed */
+	UFUNCTION(BlueprintCallable)
+	void JetpackPressed();
+
+	/* Function called when the keymap for jetpack is released */
+	UFUNCTION(BlueprintCallable)
+	void JetpackUnpressed();
 		
 	UFUNCTION(BlueprintCallable)
 	void SetJumpEnd();
@@ -279,7 +330,7 @@ private:
 	/*
 	 *  Getter/Setters
 	 */
-
+	uint8 PrevPrevCustomMovementMode = 0;
 	float CapsuleR() const;
 	float CapsuleRScaled() const;
 	float CapsuleHH() const;
@@ -298,10 +349,10 @@ public:
 	enum CompressedFlags
 	{
 		// Remaining bit masks are available for custom flags.
-		FLAG_Teleport		= 0x10, // Teleport pressed
-		FLAG_WallRun		= 0x20, // Wallrun pressed
-		FLAG_RewindTime		= 0x40, // RewindTime pressed
-		FLAG_Custom			= 0x80,
+		FLAG_Teleport = 0x10, // Teleport pressed
+		FLAG_WallRun = 0x20, // Wallrun pressed
+		FLAG_RewindTime = 0x40, // RewindTime pressed
+		FLAG_Jetpack = 0x80, // Jetpack pressed
 	};
 	
 	/*
@@ -311,7 +362,8 @@ public:
 	uint8 Saved_bWantsToTeleport:1;
 	uint8 Saved_bWantsToWallRun:1;
 	uint8 Saved_bIsRewinding:1;
-	
+	uint8 Saved_bWantsToUseJetpack : 1;
+
 	int32 Saved_RewindingIndex;
 
 	/** <FSavedMove_Es> */

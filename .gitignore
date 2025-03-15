@@ -166,9 +166,6 @@ Plugins/FMODStudio/Binaries/Win64/UE4Editor-FMODStudio.dll
 
 # ================
 # Docs
-!Source/T4Core/Docs/scripts/libs/*.exe
-!_Extras/Doxygen/doxygen.exe
-!_Extras/Doxygen/doxywizard.exe
 hashed_names_cache.txt
 
 # ================
@@ -272,13 +269,6 @@ Build/Mac/MacSign/*.pkg
 Build/Mac/MacSign/*.app
 
 # ================
-# Discord SDK Plugin
-!Plugins/T4Discord/ThirdParty/**/*.lib
-!Plugins/T4Discord/ThirdParty/**/bin
-Plugins/T4Discord/ThirdParty/**/bin/*
-!Plugins/T4Discord/ThirdParty/**/bin/*.dll
-
-# ================
 # Hydra SDK Plugin
 !Plugins/HydraInterface/HydraSDK/**/*.lib
 !Plugins/HydraInterface/HydraSDK/bin
@@ -307,3 +297,9 @@ CppProperties.json
 compileData.scor
 compileData.scor.*
 
+Plugins/GameFeatures/ShooterCore/Intermediate/Build/Win64/UnrealEditor/Inc/ShooterCoreRuntime/UHT/Timestamp
+*.res
+Plugins/GameFeatures/ShooterCore/Intermediate/Build/Win64/x64/UnrealEditor/Development/ShooterCoreRuntime/LiveCodingInfo.json
+Plugins/GameFeatures/ShooterCore/Intermediate
+Plugins/GameFeatures/ShooterTests/Binaries
+Plugins/GameFeatures/ShooterTests/Intermediate

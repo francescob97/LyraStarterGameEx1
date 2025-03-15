@@ -3,6 +3,7 @@
 
 #include "Character/EsLyraCharacterMovementComponent.h"
 
+#include "AbilitySystemComponent.h"
 #include "LyraCharacter.h"
 #include "LyraHealthComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -10,8 +11,9 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
 #include "WorldCollision.h"
-
-
+#include "AudioParameterControllerInterface.h"
+#include "JetpackComponent.h"
+#include "AbilitySystem/LyraAbilitySystemComponent.h"
 /**
  *  Get prediction data for a client game
  ****************************************************************************************/
@@ -30,6 +32,8 @@ FNetworkPredictionData_Client* UEsLyraCharacterMovementComponent::GetPredictionD
 	return ClientPredictionData;
 }
 
+
+
 UEsLyraCharacterMovementComponent::UEsLyraCharacterMovementComponent(const FObjectInitializer& ObjectInitializer)
 : Super(ObjectInitializer)
 {
@@ -37,9 +41,11 @@ UEsLyraCharacterMovementComponent::UEsLyraCharacterMovementComponent(const FObje
 	Safe_bWantsToTeleport = false;
 	Safe_bWantsToWallRun = false;
 	Safe_bIsRewinding = false;
+	Safe_bWantsToUseJetpack = false;
 	Safe_RewindingIndex = 0;
 	TeleportStartTime = 0.f;
 	RewindTimeEndTime = 0.f;
+	
 }
 
 void UEsLyraCharacterMovementComponent::InitializeComponent()
@@ -50,12 +56,22 @@ void UEsLyraCharacterMovementComponent::InitializeComponent()
 	
 	LyraHealthComponent = ESCharacterOwner->GetLyraHealthComponent();
 	check(LyraHealthComponent);
+	
+	JetpackComponent = ESCharacterOwner->GetJetpackComponent();
+	check(JetpackComponent);
 }
 
 void UEsLyraCharacterMovementComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	BufferSampleMaxSize = RewindTimeWindowDuration / RewindTimeSampleFrequencyTime;
+}
+
+
+void UEsLyraCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	
 }
 
 /**
@@ -95,6 +111,18 @@ void UEsLyraCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float
 		CollectRewindData(DeltaSeconds);		
 	}
 	
+	if (Safe_bWantsToUseJetpack)
+	{
+		if (!bAuthProxy || CanUseJetpack())
+		{
+			SetMovementMode(EMovementMode::MOVE_Custom, ECustomMovementMode::CMOVE_Jetpacking);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Error with the client values (Cheating)"));
+		}
+	}
+
 	// Wall Run	
 	TryWallRun();
 
@@ -106,16 +134,190 @@ void UEsLyraCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float
  **********************************************************************************************************/
 void UEsLyraCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations)
 {
-	Super::PhysCustom(deltaTime, Iterations);
 
 	switch (CustomMovementMode)
 	{	
-	case CMOVE_WallRun:
-		PhysWallRun(deltaTime, Iterations);
-		break;
-	default:
-		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"));
+		case CMOVE_WallRun:
+			PhysWallRun(deltaTime, Iterations);
+			break;
+		case CMOVE_Jetpacking:
+			PhysJetpacking(deltaTime, Iterations);
+			break;
+		default:
+			UE_LOG(LogTemp,Warning, TEXT("Invalid Movement Mode"));
 	}
+
+	Super::PhysCustom(deltaTime, Iterations);
+}
+
+bool UEsLyraCharacterMovementComponent::CanUseJetpack() const 
+{
+	if (!IsValid(JetpackComponent))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Jetpack component is null"));
+		return false;
+	}
+		
+	
+	if(JetpackComponent->GetJetpackResource() <= 0.f)
+	{
+		return false;
+	}
+
+	return true;
+
+}
+
+
+bool UEsLyraCharacterMovementComponent::IsFalling() const
+{
+	/* is generating me problems because movement mode is set to 0*/
+	return Super::IsFalling() || IsCustomMovementMode(ECustomMovementMode::CMOVE_Jetpacking);
+}
+
+bool UEsLyraCharacterMovementComponent::CancelJetpackGameplayAbility() const
+{
+	bool bIsCanceled = false;
+	const ALyraCharacter* LyraCharacter = UECasts_Private::DynamicCast<ALyraCharacter*>(CharacterOwner.Get());
+
+	if(!LyraCharacter)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Lyra Character is null while trying to cancel jetpacking ability"));
+		return bIsCanceled;
+	}
+	
+	TArray<FGameplayAbilitySpec*> ActiveAbilitiesWithSpecifiedTag;
+	ULyraAbilitySystemComponent* LyraAsc = LyraCharacter->GetLyraAbilitySystemComponent();
+
+	if(!LyraAsc)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Could not retrieve game ability system component while trying to cancel jetpack ability"));
+		return bIsCanceled;
+	}
+	
+	LyraAsc->GetActivatableGameplayAbilitySpecsByAllMatchingTags(JetpackGameplayActionTag, ActiveAbilitiesWithSpecifiedTag, true);
+	for (const auto AbilityWithSpecifiedTag : ActiveAbilitiesWithSpecifiedTag)
+	{
+		if(AbilityWithSpecifiedTag->IsActive())
+		{
+			LyraAsc->CancelAbility(AbilityWithSpecifiedTag->Ability);
+			bIsCanceled = true;
+			// it should be just one so we exit the loop
+			break;
+		}
+	}
+
+	return bIsCanceled;
+}
+
+
+void UEsLyraCharacterMovementComponent::PhysJetpacking(float deltaTime, int32 Iterations)
+{
+	if (deltaTime < MIN_TICK_TIME)
+	{
+		return;
+	}
+	
+	/* Amount of resource in seconds needed to use the jetpack for this round */
+	bool bIsJetpackResourceEnough = false;
+	if(IsValid(JetpackComponent))
+	{
+		const float MaxJetpackResource = JetpackComponent->GetMaxJetpackResource();
+		const float ResourceNeededForJetpacking = deltaTime / MaxJetpackResource;
+		bIsJetpackResourceEnough  = JetpackComponent->GetJetpackResource() >= ResourceNeededForJetpacking  ;
+	}
+	
+	if ((!Safe_bWantsToUseJetpack  || !bIsJetpackResourceEnough ) && CharacterOwner->GetLocalRole() != ROLE_SimulatedProxy)
+	{
+    	UE_LOG(LogTemp, Warning, TEXT("Trying to cancel jetpack ability"));
+		Safe_bWantsToUseJetpack = false;
+		if(!CancelJetpackGameplayAbility())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Jetpack ability wasn't canceled"));
+		}
+		SetMovementMode(EMovementMode::MOVE_Falling);
+		StartNewPhysics(deltaTime, Iterations);
+		
+		return;
+	}
+
+	Iterations++;
+	bJustTeleported = false;
+	
+	CharacterOwner->LaunchCharacter( FVector(0,0, JetpackVelocity), false , true);
+	auto CurrentRotation = CharacterOwner->GetActorRotation().Quaternion();
+	FHitResult Hit(1.f);
+	FVector Adjusted = Velocity * deltaTime;
+	SafeMoveUpdatedComponent(Adjusted, CurrentRotation, true, Hit);
+
+
+	
+}
+
+void UEsLyraCharacterMovementComponent::Server_ChangeJetpackStatus_Implementation(bool bIsJetpackON)
+{
+	Safe_bWantsToUseJetpack = bIsJetpackON;
+}
+
+bool UEsLyraCharacterMovementComponent::Server_ChangeJetpackStatus_Validate(bool bIsJetpackON)
+{
+	return true;
+}
+
+void UEsLyraCharacterMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode,
+	uint8 PreviousCustomMode)
+{
+	
+	
+	/*
+	 * current mode 3 falling
+	 * current mode 1 standing
+	 * current mode 6 flying/jetpacking ?
+	 * custom movement mode nothing 0
+	 * custom movement mode jetpacking 2
+	 **/
+
+
+	
+	FString netPrefix = GetWorld()->IsNetMode(NM_Client) ? "[CLIENT]" : "[SERVER]";
+
+	
+	// if(GEngine)
+	// {
+
+	// FString DebugMessage = FString::Printf(TEXT("Current Custom Movement Mode: %u Previous Movement Mode %u \n"), CustomMovementMode,  PreviousCustomMode);
+	// GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, DebugMessage);
+	UE_LOG(LogTemp, Warning, TEXT("SVS %s - Current Custom Movement Mode: %u Previous Movement Mode %u \n"), *netPrefix, CustomMovementMode,  PreviousCustomMode);
+	UE_LOG(LogTemp, Warning, TEXT("SVS %s - Current Mode: %d , Previous %u \n"), *netPrefix, MovementMode.GetValue(),  PreviousMovementMode);
+	// }
+
+	if(JetpackComponent)
+	{
+		// if(!JetpackComponent->IsSpecialEffectOn() &&
+		// 	PrevPrevCustomMovementMode != 1 &&
+		// 	PreviousCustomMode != CMOVE_Jetpacking && CustomMovementMode == CMOVE_Jetpacking)
+		if(!JetpackComponent->IsSpecialEffectOn() &&
+			PrevPrevCustomMovementMode == 0 &&
+			PreviousCustomMode == 0 &&
+			CustomMovementMode == CMOVE_Jetpacking
+			)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SVS - Effect active \n"));
+
+			JetpackComponent->SetJetpackEffects(true);
+		}  /*  This is a small hack that makes the effect disappear even though sometimes the information about the "wants to use jetpack" variable update is lost.
+		   /* While we cannot rely on the stable change of the isJetpacking since
+		   /* we switch back and forward between Falling and Jetpacking movement mode */
+		else if( JetpackComponent->IsSpecialEffectOn() &&
+			     ((PreviousCustomMode != CMOVE_Jetpacking && CustomMovementMode != CMOVE_Jetpacking) &&
+					!Safe_bWantsToUseJetpack))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Effect off - Current Custom Movement Mode: %u Previous Movement Mode %u \n"), CustomMovementMode,  PreviousCustomMode);
+			JetpackComponent->SetJetpackEffects(false);	
+		}
+	}
+	PrevPrevCustomMovementMode = PreviousCustomMode;
+	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
 }
 
 /**
@@ -142,6 +344,9 @@ void UEsLyraCharacterMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 	Safe_bWantsToTeleport = (Flags & FSavedMove_Es::FLAG_Teleport) != 0;
 	Safe_bWantsToWallRun = (Flags & FSavedMove_Es::FLAG_WallRun) != 0;
 	Safe_bIsRewinding = (Flags & FSavedMove_Es::FLAG_RewindTime) != 0;
+	Safe_bWantsToUseJetpack = (Flags & FSavedMove_Es::FLAG_Jetpack) != 0;
+	
+
 }
 
 void UEsLyraCharacterMovementComponent::MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags,
@@ -164,25 +369,23 @@ bool UEsLyraCharacterMovementComponent::CanTeleport() const
 }
 
 /**
- *  Teleport the character by TeleportImpulse. Use velocity if want to avoid sweep
+ *  Teleport the character by TeleportImpulse. Use velocity if you want to avoid sweep
  **********************************************************************************************************/
 void UEsLyraCharacterMovementComponent::PerformTeleport()
 {	
 	TeleportStartTime = GetWorld()->GetTimeSeconds();	
 
 	const FVector ForwardVector = UpdatedComponent->GetForwardVector();
-	FHitResult Hit;
-	FVector ActorCenterLocation = GetActorLocation();
-	
-	const FLyraCharacterGroundInfo GroundInfo = GetGroundInfo();
-	if (GroundInfo.GroundDistance == 0.f)
+	if (const FLyraCharacterGroundInfo GroundInfo = GetGroundInfo(); GroundInfo.GroundDistance == 0.f)
 	{
-		float groundAngleInDegrees = FMath::Acos(FVector::DotProduct(GroundInfo.GroundHitResult.Normal, FVector::UpVector)) * 180.0f / PI;
+		FHitResult Hit;
 		//If the angle is greater than zero it means the player is on a slope and sweep will prevent teleport from happening
-		if (groundAngleInDegrees > 0.f)
+		if (float GroundAngleInDegrees = FMath::Acos(
+				FVector::DotProduct(GroundInfo.GroundHitResult.Normal, FVector::UpVector)) * 180.0f / PI;
+			GroundAngleInDegrees > 0.f)
 		{
 			// Projecting the forward vector will adjust the teleport location to a direction parallel to the slope
-			FVector AdjustedTeleportLocation = FVector::VectorPlaneProject(ForwardVector, GroundInfo.GroundHitResult.Normal);
+			const FVector AdjustedTeleportLocation = FVector::VectorPlaneProject(ForwardVector, GroundInfo.GroundHitResult.Normal);
 
 			SafeMoveUpdatedComponent(AdjustedTeleportLocation * TeleportImpulse, UpdatedComponent->GetComponentRotation(), false, Hit, ETeleportType::None);
 		}
@@ -212,6 +415,7 @@ bool UEsLyraCharacterMovementComponent::CanAttemptJump() const
 /**
  *  Overwrite DoJump excluding the wallJump and including LateJump
  ****************************************************************************************/
+
 bool UEsLyraCharacterMovementComponent::DoJump(bool bReplayingMoves)
 {	
 	if(CanWallJump())
@@ -225,6 +429,8 @@ bool UEsLyraCharacterMovementComponent::DoJump(bool bReplayingMoves)
 	
 	return false;
 }
+
+
 
 /**
  *  Called on Jump Released, activates WallJump if in WallRun
@@ -553,6 +759,43 @@ void UEsLyraCharacterMovementComponent::RewindTimePressed()
 	}
 }
 
+/**
+ *  Called on Jetpack pressed, activates Jetpack if the jetpack cooldown is over
+ ****************************************************************************************/
+void UEsLyraCharacterMovementComponent::JetpackPressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("Jetpack key pressed"));
+
+	if(!CanUseJetpack())
+	{
+			return;
+	}
+
+	
+	
+	if (const bool bIsClient = !CharacterOwner->HasAuthority() && CharacterOwner->IsLocallyControlled())
+	{
+		Server_ChangeJetpackStatus_Implementation(true);
+	}
+
+	Safe_bWantsToUseJetpack = true;
+	
+}
+
+void UEsLyraCharacterMovementComponent::JetpackUnpressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("Jetpack key released"));
+	{
+	}
+
+	if (const bool bIsClient = !CharacterOwner->HasAuthority() && CharacterOwner->IsLocallyControlled())
+	{
+		Server_ChangeJetpackStatus_Implementation(false);
+	}
+
+	Safe_bWantsToUseJetpack = false;
+}
+
 float UEsLyraCharacterMovementComponent::GetRewindingTimeHealingMagnitude()
 {	
 	float MaxHealthInRewindingWindow = 0.f;
@@ -619,6 +862,7 @@ FSavedMove_Es::FSavedMove_Es()
 	Saved_bWantsToWallRun = 0;
 	Saved_bIsRewinding = 0;
 	Saved_RewindingIndex = 0;
+	Saved_bWantsToUseJetpack = 0;
 }
 
 void FSavedMove_Es::Clear()
@@ -629,6 +873,7 @@ void FSavedMove_Es::Clear()
 	Saved_bWantsToWallRun = 0;
 	Saved_bIsRewinding = 0;
 	Saved_RewindingIndex = 0;
+	Saved_bWantsToUseJetpack = 0;
 }
 
 /**
@@ -645,6 +890,7 @@ void FSavedMove_Es::SetMoveFor(ACharacter* C, float InDeltaTime, FVector const& 
 	Saved_bWantsToTeleport = CharacterMovement->Safe_bWantsToTeleport;
 	Saved_bIsRewinding = CharacterMovement->Safe_bIsRewinding;
 	Saved_RewindingIndex = CharacterMovement->Safe_RewindingIndex;
+	Saved_bWantsToUseJetpack = CharacterMovement->Safe_bWantsToUseJetpack;
 }
 
 /**
@@ -674,6 +920,11 @@ bool FSavedMove_Es::CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* InC
 		return false;
 	}
 
+	if (Saved_bWantsToUseJetpack != NewEsMove->Saved_bWantsToUseJetpack)
+	{
+		return false;
+	}
+
 	return Super::CanCombineWith(NewMove, InCharacter, MaxDelta);
 }
 
@@ -692,6 +943,7 @@ void FSavedMove_Es::PrepMoveFor(ACharacter* C)
 
 	CharacterMovement->Safe_bIsRewinding = Saved_bIsRewinding;
 	CharacterMovement->Safe_RewindingIndex = Saved_RewindingIndex;	
+	CharacterMovement->Safe_bWantsToUseJetpack = Saved_bWantsToUseJetpack;
 }
 
 /**
@@ -715,6 +967,12 @@ uint8 FSavedMove_Es::GetCompressedFlags() const
 	{
 		Result |= FLAG_RewindTime;
 	}
+
+	if (Saved_bWantsToUseJetpack)
+	{
+		Result |= FLAG_Jetpack;
+	}
+
 	
 	return Result;
 }
@@ -783,4 +1041,4 @@ void FEsNetworkMoveData::ClientFillNetworkMoveData(const FSavedMove_Character& C
 	Saved_RewindingIndex = CustomMove->Saved_RewindingIndex;
 }
 
-#pragma region Custom Move Data
+#pragma endregion Custom Move Data

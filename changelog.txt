@@ -1,0 +1,9 @@
+# Changelog
+
+## June 2024
+- fixed "logwarning LogConsoleManager: Warning: Console variable 'FX.AllowGPUSorting' used in the render thread. Rendering artifacts could happen. Use ECVF_RenderThreadSafe or don't use in render thread."
+
+## July
+- added UI for jetpack resource
+- added jetpack resource regeneration and cost effect
+- set as default EsLyraCharacterMovementComponent for the CharacterMovementComponent in the LyraCharacter.cpp constructor

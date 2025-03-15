@@ -8,6 +8,14 @@ Responsive implementation, using client prediction and server-reconciliation of 
 
 These have been implemented as special moves inside the CharacterMovementComponent (CMC)
 
+## How to contribute
+
+Fork the project, create a new branch from main, open the Editor, go to Edit > EditorPreferences, then on the left, click "Lyra Developer Settings".
+On your right, go to Allow player bots to Attack and untick it to avoid being shot while testing.
+Once you are done open a pull request in the main project.
+
+To test multiplayer: On the editor on the left select from "Common Maps" the "L_ShooterGym" level and set the net mode to "Play As Listen Server"
+
 ## General procedure
 
 Ability and bindings have been set up according to the gameplay ability system used in Lyra.
@@ -15,6 +23,7 @@ So, for example for the teleport, a GA_Teleport (Gameplay Ability with Widget), 
 the GE_Teleport (Gameplay Effect) and the gameplay tag were created and linked all in the AbilitySet_ShooterHero Data Asset, 
 InputData_Hero Data Asset, Input action and IMC KBM (Input Mapping Context Keyboard).
 Finally the teleport part inside the custom character movement component, called ESLyraCharacterMovementComponent, have been coded.
+
 
 ### Overview of Movement Pipeline
 

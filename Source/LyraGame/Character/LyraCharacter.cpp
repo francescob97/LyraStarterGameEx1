@@ -10,6 +10,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "LyraCharacterMovementComponent.h"
 #include "EsLyraCharacterMovementComponent.h"
+#include "JetpackComponent.h"
 #include "LyraGameplayTags.h"
 #include "LyraLogChannels.h"
 #include "Net/UnrealNetwork.h"
@@ -29,8 +30,9 @@ static FName NAME_LyraCharacterCollisionProfile_Capsule(TEXT("LyraPawnCapsule"))
 static FName NAME_LyraCharacterCollisionProfile_Mesh(TEXT("LyraPawnMesh"));
 
 ALyraCharacter::ALyraCharacter(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer.SetDefaultSubobjectClass<ULyraCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UEsLyraCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
+	ESCharacterMovement = Cast<UEsLyraCharacterMovementComponent>(GetCharacterMovement());
 	// Avoid ticking characters if possible.
 	PrimaryActorTick.bCanEverTick = false;
 	PrimaryActorTick.bStartWithTickEnabled = false;
@@ -73,6 +75,9 @@ ALyraCharacter::ALyraCharacter(const FObjectInitializer& ObjectInitializer)
 	CameraComponent = CreateDefaultSubobject<ULyraCameraComponent>(TEXT("CameraComponent"));
 	CameraComponent->SetRelativeLocation(FVector(-300.0f, 0.0f, 75.0f));
 
+	/*custom component */
+	JetpackComponent = CreateDefaultSubobject<UJetpackComponent>(TEXT("JetpackComponent"));
+	
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = true;
 	bUseControllerRotationRoll = false;
@@ -206,6 +211,11 @@ ULyraHealthComponent* ALyraCharacter::GetLyraHealthComponent() const
 	return HealthComponent;
 }
 
+UJetpackComponent* ALyraCharacter::GetJetpackComponent() const
+{
+	return JetpackComponent;
+}
+
 void ALyraCharacter::OnAbilitySystemInitialized()
 {
 	ULyraAbilitySystemComponent* LyraASC = GetLyraAbilitySystemComponent();
@@ -213,12 +223,16 @@ void ALyraCharacter::OnAbilitySystemInitialized()
 
 	HealthComponent->InitializeWithAbilitySystem(LyraASC);
 
+	JetpackComponent->InitializeWithAbilitySystem(LyraASC);
+	
 	InitializeGameplayTags();
 }
 
 void ALyraCharacter::OnAbilitySystemUninitialized()
 {
 	HealthComponent->UninitializeFromAbilitySystem();
+	JetpackComponent->UninitializeFromAbilitySystem();
+
 }
 
 void ALyraCharacter::PossessedBy(AController* NewController)

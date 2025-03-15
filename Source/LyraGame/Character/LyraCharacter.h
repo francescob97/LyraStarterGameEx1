@@ -10,6 +10,7 @@
 
 #include "LyraCharacter.generated.h"
 
+class UJetpackComponent;
 class UEsLyraCharacterMovementComponent;
 class AActor;
 class AController;
@@ -114,6 +115,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Lyra|Character")
 	ULyraHealthComponent* GetLyraHealthComponent() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Lyra|Character")
+	UJetpackComponent* GetJetpackComponent() const;
 	
 	virtual void GetOwnedGameplayTags(FGameplayTagContainer& TagContainer) const override;
 	virtual bool HasMatchingGameplayTag(FGameplayTag TagToCheck) const override;
@@ -205,6 +209,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Lyra|Character", Meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<ULyraCameraComponent> CameraComponent;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Lyra|Character", Meta = (AllowPrivateAccess = "true"))
+	UJetpackComponent* JetpackComponent;
+	
 	UPROPERTY(Transient, ReplicatedUsing = OnRep_ReplicatedAcceleration)
 	FLyraReplicatedAcceleration ReplicatedAcceleration;
 
